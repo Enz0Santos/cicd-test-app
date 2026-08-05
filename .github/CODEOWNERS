@@ -1,0 +1,11 @@
+# Editing a workflow file is the privilege-escalation path in Actions: a Write-level
+# contributor cannot grant themselves secrets through the UI, but they can make the
+# pipeline do it. Review on this path is required regardless of who else has Write.
+# See docs/Privilege Separation.md III.
+#
+# REPLACE THE PLACEHOLDER BELOW. GitHub skips any rule whose owner does not
+# resolve to a real account or team, so this file protects nothing until the
+# handle is real. The `workflow-lint` job fails the build while it is not, and
+# even a real handle only blocks a merge once `Require review from Code Owners`
+# is enabled on the branch rule (docs/Manual Setup Checklist.md IV).
+/.github/workflows/ @<owner-username>

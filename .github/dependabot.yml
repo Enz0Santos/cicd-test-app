@@ -1,0 +1,35 @@
+version: 2
+updates:
+  # Keep the SHA pins in .github/workflows current without un-pinning them.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    # Wait before adopting brand-new releases, so the community has time to catch a compromised version before it lands in this repo.
+    cooldown:
+      default-days: 7
+
+  # The base image in the Dockerfile, pinned by digest and bumped here.
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+
+  # Application dependencies. The app has none today; this exists so the first
+  # one added is bumped on the same terms as everything else instead of drifting.
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+
+  # zizmor, so the linter version does not rot behind its recorded hashes.
+  - package-ecosystem: "pip"
+    directory: "/.github/zizmor"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7

@@ -1,0 +1,469 @@
+name: CI-CD
+
+on:
+  pull_request:
+    branches: ["main", "master"]
+  push:
+    branches: ["main", "master"]
+
+# Separate concurrency lanes per event type so a PR run can never cancel a push run or something that may already be publishing/deploying.
+concurrency:
+  group: cicd-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Deny by default. Each job grants only what it needs.
+permissions: {}
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  APP_PORT: "3000"
+
+jobs:
+  # Static analysis of the workflows themselves (injection, unpinned actions,
+  # broad permissions, dangerous triggers, impostor commits), plus the two
+  # checks that keep the repository's own guard rails from going inert.
+  # Make this a required status check so workflow regressions cannot merge.
+  workflow-lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      # Egress monitoring. `audit` reports destinations without blocking; switch
+      # to `block` with an allowlist once the report for this job is boring.
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Installed from a hash-pinned requirements file rather than a marketplace
+      # action, so the job that audits the supply chain has one of its own that
+      # cannot change under a fixed version string.
+      - name: Install zizmor
+        run: |
+          set -euo pipefail
+          python3 -m venv "${RUNNER_TEMP}/zizmor"
+          "${RUNNER_TEMP}/zizmor/bin/pip" install --quiet --require-hashes --no-deps \
+            -r .github/zizmor/requirements.txt
+
+      # Release binary verified against a recorded checksum before it executes.
+      - name: Install actionlint
+        env:
+          ACTIONLINT_VERSION: "1.7.12"
+          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        run: |
+          set -euo pipefail
+          ARCHIVE="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl -sSfL --proto '=https' --tlsv1.2 -o "${RUNNER_TEMP}/${ARCHIVE}" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${ARCHIVE}"
+          echo "${ACTIONLINT_SHA256}  ${RUNNER_TEMP}/${ARCHIVE}" | sha256sum -c -
+          tar -xzf "${RUNNER_TEMP}/${ARCHIVE}" -C "${RUNNER_TEMP}" actionlint
+
+      - name: Audit workflows
+        env:
+          # Lets zizmor reach the GitHub API for the online audits, notably
+          # impostor-commit and known-vulnerable-actions. Read-only scope.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          "${RUNNER_TEMP}/zizmor/bin/zizmor" --min-severity medium .github/workflows/
+
+      - name: Lint workflows
+        run: |
+          "${RUNNER_TEMP}/actionlint" -color
+
+      # CODEOWNERS is the review gate on the workflow directory, and GitHub
+      # silently skips any rule whose owner does not resolve to a real account.
+      # An unedited placeholder is therefore not a weaker control, it is none.
+      - name: Check CODEOWNERS names a real owner
+        run: |
+          set -euo pipefail
+          if [ ! -f .github/CODEOWNERS ]; then
+            echo "::error::.github/CODEOWNERS is missing, so the workflow directory has no required reviewer."
+            exit 1
+          fi
+          if grep -q '<owner-username>' .github/CODEOWNERS; then
+            echo "::error::.github/CODEOWNERS still holds the @<owner-username> placeholder. GitHub skips rules whose owner does not resolve, so /.github/workflows/ is unprotected until this is a real account or team."
+            exit 1
+          fi
+          if ! grep -qE '^/\.github/workflows/[[:space:]]+@[A-Za-z0-9]' .github/CODEOWNERS; then
+            echo "::error::.github/CODEOWNERS has no owner entry for /.github/workflows/."
+            exit 1
+          fi
+
+  # Gated on workflow-lint: a workflow-security regression must stop the run
+  # before anything builds, publishes or deploys.
+  ci:
+    needs: workflow-lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "20"
+
+      # `npm ci` installs exactly what package-lock.json records, and
+      # --ignore-scripts keeps a dependency's install hooks from running here.
+      - name: Install dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Run unit tests
+        run: npm test
+
+      - name: Image metadata
+        id: meta
+        run: |
+          set -euo pipefail
+          NAME="${REGISTRY}/$(echo "${IMAGE_NAME}" | tr '[:upper:]' '[:lower:]')"
+          echo "image=${NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      # Cache scope is per branch, so a fork PR writes into its own scope and
+      # cannot reach the default branch's. Withholding the write on PRs is the
+      # quota and hygiene control on top of that; the boundary that protects the
+      # release path is `publish` restoring no cache at all.
+      - name: Build image (no push on PR)
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          push: false
+          load: true
+          tags: ${{ steps.meta.outputs.image }}:ci
+          cache-from: type=gha
+          cache-to: ${{ github.event_name == 'push' && 'type=gha,mode=max' || '' }}
+
+      - name: Container smoke test
+        env:
+          # Never interpolate ${{ }} directly into a shell script.
+          IMAGE_REF: ${{ steps.meta.outputs.image }}:ci
+        run: |
+          set -euo pipefail
+          docker rm -f smoke >/dev/null 2>&1 || true
+          docker run -d --name smoke -p 8080:"${APP_PORT}" -e PORT="${APP_PORT}" "$IMAGE_REF"
+          trap 'docker logs smoke || true; docker rm -f smoke || true' EXIT
+
+          for i in $(seq 1 15); do
+            if curl -fsS --max-time 2 "http://127.0.0.1:8080/health" >/dev/null 2>&1; then break; fi
+            if [ "$i" -eq 15 ]; then echo "Smoke test failed: /health never became ready"; docker logs smoke; exit 1; fi
+            sleep 1
+          done
+
+          curl -fsS "http://127.0.0.1:8080/health" | tee /tmp/health.json
+          grep -q '"status":"ok"' /tmp/health.json
+          curl -fsS "http://127.0.0.1:8080/" | tee /tmp/home.html
+          grep -q "cicd-test-app" /tmp/home.html
+
+          trap - EXIT
+          docker rm -f smoke
+
+      # Image vulnerability + embedded-secret scan. Live YAML behind a repository
+      # variable rather than commented out, so zizmor still audits the reference
+      # and Dependabot still bumps the pin. Commented-out steps are audited by
+      # nothing and rot until someone uncomments a pin no tool has ever checked.
+      # Enable with `ENABLE_TRIVY=true` in Settings > Secrets and variables >
+      # Actions > Variables. Drop `exit-code` to "0" to observe before gating.
+      - name: Trivy image scan
+        if: vars.ENABLE_TRIVY == 'true'
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: ${{ steps.meta.outputs.image }}:ci
+          scanners: vuln,secret
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          format: table
+          exit-code: "1"
+        env:
+          # Pull the vuln DB with the job's own token to avoid anonymous ghcr.io rate limits flaking the build.
+          TRIVY_USERNAME: ${{ github.actor }}
+          TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+
+  # Publishing, verifying and deploying are split so no job holds more than it
+  # needs: `publish` gets a package-write token and no deployment secrets,
+  # `verify` gets read scopes only, `deploy` gets the deployment secrets and a
+  # token with no scopes at all.
+  publish:
+    needs: ci
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+      id-token: write      # keyless signing identity for the provenance attestation
+      attestations: write  # write the SLSA build provenance attestation
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Image metadata
+        id: meta
+        run: |
+          set -euo pipefail
+          NAME="${REGISTRY}/$(echo "${IMAGE_NAME}" | tr '[:upper:]' '[:lower:]')"
+          echo "image=${NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      # No cache-from on the release build: don't restore a cache a PR job (potentially attacker-influenced) may have written.
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.image }}:${{ github.sha }}
+            ${{ steps.meta.outputs.image }}:latest
+          # BuildKit's own provenance is off; provenance is attested below through GitHub's attestation API instead.
+          provenance: false
+
+      # Proves how the image was built (source repo, commit, builder, workflow).
+      # Verify with: gh attestation verify oci://<image>@<digest> -R <owner>/<repo>
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-name: ${{ steps.meta.outputs.image }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+  # Everything between building an image and asking the server to run it. Read
+  # scopes only, no deployment secrets: it decides whether `deploy` may run, and
+  # it does that against the artifact in the registry rather than a local build.
+  verify:
+    needs: publish
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: read
+      attestations: read
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Log in to GHCR
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Coolify pulls a tag, so the tag has to be proven to point at this run's
+      # digest before the webhook fires. Without this the deployed artifact is
+      # selected by a mutable reference nothing ever checked.
+      - name: Tag resolves to this run's digest
+        env:
+          IMAGE: ${{ needs.publish.outputs.image }}
+          DIGEST: ${{ needs.publish.outputs.digest }}
+        run: |
+          set -euo pipefail
+          LATEST="$(docker buildx imagetools inspect --format '{{.Manifest.Digest}}' "${IMAGE}:latest")"
+          echo "latest -> ${LATEST}"
+          if [ "$LATEST" != "$DIGEST" ]; then
+            echo "::error::${IMAGE}:latest resolves to ${LATEST}, not the ${DIGEST} this run built and attested."
+            exit 1
+          fi
+
+      # The attestation stops being decoration only when something refuses to
+      # deploy without it.
+      - name: Verify build provenance
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE: ${{ needs.publish.outputs.image }}
+          DIGEST: ${{ needs.publish.outputs.digest }}
+          REPO: ${{ github.repository }}
+        run: gh attestation verify "oci://${IMAGE}@${DIGEST}" -R "$REPO"
+
+      # `ci` tested a locally built image. This tests the bytes the server will
+      # actually pull, so a base image that moved between the two builds cannot
+      # ship untested.
+      - name: Smoke test the published image
+        env:
+          IMAGE_REF: ${{ needs.publish.outputs.image }}@${{ needs.publish.outputs.digest }}
+        run: |
+          set -euo pipefail
+          docker rm -f released >/dev/null 2>&1 || true
+          docker run -d --name released -p 8080:"${APP_PORT}" -e PORT="${APP_PORT}" "$IMAGE_REF"
+          trap 'docker logs released || true; docker rm -f released || true' EXIT
+
+          for i in $(seq 1 15); do
+            if curl -fsS --max-time 2 "http://127.0.0.1:8080/health" >/dev/null 2>&1; then break; fi
+            if [ "$i" -eq 15 ]; then echo "Smoke test failed: /health never became ready"; docker logs released; exit 1; fi
+            sleep 1
+          done
+
+          curl -fsS "http://127.0.0.1:8080/health" | tee /tmp/health.json
+          grep -q '"status":"ok"' /tmp/health.json
+          curl -fsS "http://127.0.0.1:8080/" | tee /tmp/home.html
+          grep -q "cicd-test-app" /tmp/home.html
+
+          trap - EXIT
+          docker rm -f released
+
+  deploy:
+    needs: verify
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Attach the deployment secrets to this environment and protect it with required reviewers + a deployment branch policy (main/master only).
+    environment: Default
+    # No repository access is needed to fire the webhook.
+    permissions: {}
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      # The request is issued from Python reading os.environ, so no secret ever
+      # reaches argv and none of them are visible in /proc/<pid>/cmdline. Do NOT
+      # "simplify" this back to curl with the secrets as arguments, and do not
+      # move them into a `curl --config` file either: config values containing
+      # whitespace are dropped outright when unquoted and have backslash/quote
+      # sequences eaten when quoted, so the request silently goes out with no
+      # credentials and still returns a 2xx.
+      - name: Trigger Coolify deploy
+        env:
+          COOLIFY_DEPLOY_WEBHOOK: ${{ secrets.COOLIFY_DEPLOY_WEBHOOK }}
+          COOLIFY_API_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
+          CLOUDFLARE_CF_ID: ${{ secrets.CLOUDFLARE_CF_ID }}
+          CLOUDFLARE_CF_SECRET: ${{ secrets.CLOUDFLARE_CF_SECRET }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import ssl
+          import sys
+          import urllib.error
+          import urllib.request
+          from urllib.parse import urlparse
+
+          REQUIRED = (
+              "COOLIFY_DEPLOY_WEBHOOK",
+              "COOLIFY_API_TOKEN",
+              "CLOUDFLARE_CF_ID",
+              "CLOUDFLARE_CF_SECRET",
+          )
+
+          # Fail fast on any missing secret rather than sending a half-formed
+          # request (an empty bearer token used to degrade silently).
+          secret = {}
+          for name in REQUIRED:
+              value = os.environ.get(name, "")
+              if not value:
+                  print(f"Missing secret {name} (set it on the Default environment).")
+                  sys.exit(1)
+              secret[name] = value
+
+          url = secret["COOLIFY_DEPLOY_WEBHOOK"]
+          if urlparse(url).scheme != "https":
+              print("COOLIFY_DEPLOY_WEBHOOK is not an https URL. Fix the secret.")
+              sys.exit(1)
+
+          # The workflow composes this, so GitHub has never seen it as a secret
+          # and would not redact it. Register it before it is used anywhere.
+          client_id = secret["CLOUDFLARE_CF_ID"] + ".access"
+          print(f"::add-mask::{client_id}", flush=True)
+
+          context = ssl.create_default_context()
+          context.minimum_version = ssl.TLSVersion.TLSv1_2
+
+          class NoRedirects(urllib.request.HTTPRedirectHandler):
+              # A followed redirect would replay the Authorization header to
+              # whatever host the redirect names.
+              def redirect_request(self, *args, **kwargs):
+                  return None
+
+          opener = urllib.request.build_opener(
+              NoRedirects, urllib.request.HTTPSHandler(context=context)
+          )
+
+          request = urllib.request.Request(url, method="GET")
+          request.add_header("Authorization", "Bearer " + secret["COOLIFY_API_TOKEN"])
+          request.add_header("Accept", "application/json")
+          request.add_header("CF-Access-Client-Id", client_id)
+          request.add_header("CF-Access-Client-Secret", secret["CLOUDFLARE_CF_SECRET"])
+
+          body = b""
+          try:
+              # One attempt, no retry: a retry after a 5xx could fire a second
+              # deployment. The timeout keeps four secrets from staying resident
+              # on the runner until the job timeout if the endpoint tarpits.
+              with opener.open(request, timeout=30) as response:
+                  status = response.status
+                  body = response.read(4096)
+          except urllib.error.HTTPError as error:
+              status = error.code
+              body = error.read(4096)
+          except Exception as error:
+              # Never print the exception itself: urllib puts the request URL,
+              # which is a secret, into its message.
+              print(f"Deploy request failed before a response arrived ({type(error).__name__}).")
+              sys.exit(1)
+
+          print(f"Coolify deploy response HTTP {status}")
+
+          if status in (200, 201, 202, 204):
+              print("Deploy webhook invoked")
+              sys.exit(0)
+
+          # Named fields only, never the raw body: it carries deployment UUIDs
+          # and internal hostnames that GitHub does not know to mask.
+          detail = ""
+          try:
+              parsed = json.loads(body.decode("utf-8", "replace"))
+          except ValueError:
+              parsed = None
+          if isinstance(parsed, dict):
+              for key in ("message", "error"):
+                  if isinstance(parsed.get(key), str):
+                      detail = parsed[key][:200]
+                      break
+
+          print(f"Coolify deploy webhook failed with HTTP {status}. {detail}".rstrip())
+          sys.exit(1)
+          PY
