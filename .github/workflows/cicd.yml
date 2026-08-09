@@ -20,18 +20,14 @@ env:
   APP_PORT: "3000"
 
 jobs:
-  # Static analysis of the workflows themselves (injection, unpinned actions,
-  # broad permissions, dangerous triggers, impostor commits), plus the two
-  # checks that keep the repository's own guard rails from going inert.
-  # Make this a required status check so workflow regressions cannot merge.
+  # Static analysis of the workflows themselves (injection, unpinned actions, broad permissions, dangerous triggers, impostor commits), plus the two checks that keep the repository's own guard rails from going inert. Make this a required status check so workflow regressions cannot merge.
   workflow-lint:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: read
     steps:
-      # Egress monitoring. `audit` reports destinations without blocking; switch
-      # to `block` with an allowlist once the report for this job is boring.
+      # Egress monitoring. `audit` reports destinations without blocking; switch to `block` with an allowlist once the report for this job is boring.
       - name: Harden runner
         uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
         with:
@@ -42,9 +38,7 @@ jobs:
         with:
           persist-credentials: false
 
-      # Installed from a hash-pinned requirements file rather than a marketplace
-      # action, so the job that audits the supply chain has one of its own that
-      # cannot change under a fixed version string.
+      # Installed from a hash-pinned requirements file rather than a marketplace action, so the job that audits the supply chain has one of its own that cannot change under a fixed version string.
       - name: Install zizmor
         run: |
           set -euo pipefail
@@ -67,8 +61,7 @@ jobs:
 
       - name: Audit workflows
         env:
-          # Lets zizmor reach the GitHub API for the online audits, notably
-          # impostor-commit and known-vulnerable-actions. Read-only scope.
+          # Lets zizmor reach the GitHub API for the online audits, notably impostor-commit and known-vulnerable-actions. Read-only scope.
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           "${RUNNER_TEMP}/zizmor/bin/zizmor" --min-severity medium .github/workflows/
@@ -77,9 +70,7 @@ jobs:
         run: |
           "${RUNNER_TEMP}/actionlint" -color
 
-      # CODEOWNERS is the review gate on the workflow directory, and GitHub
-      # silently skips any rule whose owner does not resolve to a real account.
-      # An unedited placeholder is therefore not a weaker control, it is none.
+      # CODEOWNERS is the review gate on the workflow directory, and GitHub silently skips any rule whose owner does not resolve to a real account. An unedited placeholder is therefore not a weaker control, it is none.
       - name: Check CODEOWNERS names a real owner
         run: |
           set -euo pipefail
@@ -96,8 +87,7 @@ jobs:
             exit 1
           fi
 
-  # Gated on workflow-lint: a workflow-security regression must stop the run
-  # before anything builds, publishes or deploys.
+  # Gated on workflow-lint: a workflow-security regression must stop the run before anything builds, publishes or deploys.
   ci:
     needs: workflow-lint
     runs-on: ubuntu-latest
@@ -120,8 +110,7 @@ jobs:
         with:
           node-version: "20"
 
-      # `npm ci` installs exactly what package-lock.json records, and
-      # --ignore-scripts keeps a dependency's install hooks from running here.
+      # `npm ci` installs exactly what package-lock.json records, and --ignore-scripts keeps a dependency's install hooks from running here.
       - name: Install dependencies
         run: npm ci --ignore-scripts --no-audit --no-fund
 
@@ -138,10 +127,7 @@ jobs:
       - name: Set up Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
-      # Cache scope is per branch, so a fork PR writes into its own scope and
-      # cannot reach the default branch's. Withholding the write on PRs is the
-      # quota and hygiene control on top of that; the boundary that protects the
-      # release path is `publish` restoring no cache at all.
+      # Cache scope is per branch, so a fork PR writes into its own scope and cannot reach the default branch's. Withholding the write on PRs is the quota and hygiene control on top of that; the boundary that protects the release path is `publish` restoring no cache at all.
       - name: Build image (no push on PR)
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
@@ -176,12 +162,7 @@ jobs:
           trap - EXIT
           docker rm -f smoke
 
-      # Image vulnerability + embedded-secret scan. Live YAML behind a repository
-      # variable rather than commented out, so zizmor still audits the reference
-      # and Dependabot still bumps the pin. Commented-out steps are audited by
-      # nothing and rot until someone uncomments a pin no tool has ever checked.
-      # Enable with `ENABLE_TRIVY=true` in Settings > Secrets and variables >
-      # Actions > Variables. Drop `exit-code` to "0" to observe before gating.
+      # Image vulnerability + embedded-secret scan. Live YAML behind a repository variable rather than commented out, so zizmor still audits the reference and Dependabot still bumps the pin. Commented-out steps are audited by nothing and rot until someone uncomments a pin no tool has ever checked. Enable with `ENABLE_TRIVY=true` in Settings > Secrets and variables > Actions > Variables. Drop `exit-code` to "0" to observe before gating.
       - name: Trivy image scan
         if: vars.ENABLE_TRIVY == 'true'
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
@@ -199,10 +180,7 @@ jobs:
           TRIVY_USERNAME: ${{ github.actor }}
           TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
 
-  # Publishing, verifying and deploying are split so no job holds more than it
-  # needs: `publish` gets a package-write token and no deployment secrets,
-  # `verify` gets read scopes only, `deploy` gets the deployment secrets and a
-  # token with no scopes at all.
+  # Publishing, verifying and deploying are split so no job holds more than it needs: `publish` gets a package-write token and no deployment secrets, `verify` gets read scopes only, `deploy` gets the deployment secrets and a token with no scopes at all.
   publish:
     needs: ci
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
@@ -257,8 +235,7 @@ jobs:
           # BuildKit's own provenance is off; provenance is attested below through GitHub's attestation API instead.
           provenance: false
 
-      # Proves how the image was built (source repo, commit, builder, workflow).
-      # Verify with: gh attestation verify oci://<image>@<digest> -R <owner>/<repo>
+      # Proves how the image was built (source repo, commit, builder, workflow). Verify with: gh attestation verify oci://<image>@<digest> -R <owner>/<repo>
       - name: Attest build provenance
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
@@ -266,9 +243,7 @@ jobs:
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true
 
-  # Everything between building an image and asking the server to run it. Read
-  # scopes only, no deployment secrets: it decides whether `deploy` may run, and
-  # it does that against the artifact in the registry rather than a local build.
+  # Everything between building an image and asking the server to run it. Read scopes only, no deployment secrets: it decides whether `deploy` may run, and it does that against the artifact in the registry rather than a local build.
   verify:
     needs: publish
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
@@ -291,9 +266,7 @@ jobs:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Coolify pulls a tag, so the tag has to be proven to point at this run's
-      # digest before the webhook fires. Without this the deployed artifact is
-      # selected by a mutable reference nothing ever checked.
+      # Coolify pulls a tag, so the tag has to be proven to point at this run's digest before the webhook fires. Without this the deployed artifact is selected by a mutable reference nothing ever checked.
       - name: Tag resolves to this run's digest
         env:
           IMAGE: ${{ needs.publish.outputs.image }}
@@ -307,8 +280,7 @@ jobs:
             exit 1
           fi
 
-      # The attestation stops being decoration only when something refuses to
-      # deploy without it.
+      # The attestation stops being decoration only when something refuses to deploy without it.
       - name: Verify build provenance
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -317,9 +289,7 @@ jobs:
           REPO: ${{ github.repository }}
         run: gh attestation verify "oci://${IMAGE}@${DIGEST}" -R "$REPO"
 
-      # `ci` tested a locally built image. This tests the bytes the server will
-      # actually pull, so a base image that moved between the two builds cannot
-      # ship untested.
+      # `ci` tested a locally built image. This tests the bytes the server will actually pull, so a base image that moved between the two builds cannot ship untested.
       - name: Smoke test the published image
         env:
           IMAGE_REF: ${{ needs.publish.outputs.image }}@${{ needs.publish.outputs.digest }}
@@ -358,13 +328,7 @@ jobs:
         with:
           egress-policy: audit
 
-      # The request is issued from Python reading os.environ, so no secret ever
-      # reaches argv and none of them are visible in /proc/<pid>/cmdline. Do NOT
-      # "simplify" this back to curl with the secrets as arguments, and do not
-      # move them into a `curl --config` file either: config values containing
-      # whitespace are dropped outright when unquoted and have backslash/quote
-      # sequences eaten when quoted, so the request silently goes out with no
-      # credentials and still returns a 2xx.
+      # The request is issued from Python reading os.environ, so no secret ever reaches argv and none of them are visible in /proc/<pid>/cmdline. Do NOT "simplify" this back to curl with the secrets as arguments, and do not move them into a `curl --config` file either: config values containing whitespace are dropped outright when unquoted and have backslash/quote sequences eaten when quoted, so the request silently goes out with no credentials and still returns a 2xx.
       - name: Trigger Coolify deploy
         env:
           COOLIFY_DEPLOY_WEBHOOK: ${{ secrets.COOLIFY_DEPLOY_WEBHOOK }}

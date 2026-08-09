@@ -1,10 +1,6 @@
-# zizmor, pinned by version and by artifact hash. `--require-hashes` refuses
-# anything whose bytes do not match, so a fixed version string cannot start
-# resolving to different code. The linter that audits the supply chain is the
-# last thing that should have an unpinned one of its own.
+# zizmor, pinned by version and by artifact hash. `--require-hashes` refuses anything whose bytes do not match, so a fixed version string cannot start resolving to different code. The linter that audits the supply chain is the last thing that should have an unpinned one of its own.
 #
-# Hashes are the manylinux_2_28_x86_64 wheel (what a GitHub-hosted ubuntu runner
-# installs) and the sdist. Refresh both after a version bump:
+# Hashes are the manylinux_2_28_x86_64 wheel (what a GitHub-hosted ubuntu runner installs) and the sdist. Refresh both after a version bump:
 #   pip download zizmor==<version> --no-deps -d /tmp/z && sha256sum /tmp/z/*
 zizmor==1.28.0 \
     --hash=sha256:ae2cab67ce713e760e0d1b61ad749d374693ea2b310337aab11cd446748267f3 \
