@@ -1,5 +1,5 @@
 # Pinned by digest, not by tag: `node:20-alpine` is repointed on every patch release, and an unpinned base means the image CI tested and the image the registry received can be built from different bytes. Dependabot's `docker` ecosystem bumps the digest and the comment together.
-FROM node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293
+FROM node:26-alpine@sha256:aadf416b2cdce311a8811ba3f0608a61b77dbf997500e2eafe781b51f6a0b019
 
 # Many managed platforms (Coolify, etc.) run HTTP healthchecks with `curl` inside the container. Alpine's busybox wget alone isn't enough for those.
 RUN apk add --no-cache curl
