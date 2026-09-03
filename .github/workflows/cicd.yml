@@ -387,6 +387,10 @@ jobs:
           )
 
           request = urllib.request.Request(url, method="GET")
+          # urllib's default "Python-urllib/3.x" User-Agent is on Cloudflare's
+          # managed WAF blocklist, so the request is refused at the edge with a
+          # 403 that never reaches the tunnel. Send a plain identifier instead.
+          request.add_header("User-Agent", "cicd-test-app-deploy")
           request.add_header("Authorization", "Bearer " + secret["COOLIFY_API_TOKEN"])
           request.add_header("Accept", "application/json")
           request.add_header("CF-Access-Client-Id", client_id)
