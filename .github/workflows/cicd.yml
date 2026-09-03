@@ -386,7 +386,10 @@ jobs:
               NoRedirects, urllib.request.HTTPSHandler(context=context)
           )
 
-          request = urllib.request.Request(url, method="GET")
+          # Coolify's deploy webhook is POST (it was GET in older releases and
+          # now answers GET with 405 "This endpoint has changed to a POST
+          # request."). The resource uuid stays in the query string; no body.
+          request = urllib.request.Request(url, method="POST")
           # urllib's default "Python-urllib/3.x" User-Agent is on Cloudflare's
           # managed WAF blocklist, so the request is refused at the edge with a
           # 403 that never reaches the tunnel. Send a plain identifier instead.
