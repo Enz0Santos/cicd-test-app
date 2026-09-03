@@ -8,8 +8,8 @@ const PORT = process.env.PORT === undefined || process.env.PORT === "" ?
 // CHANGE THESE to make a visible difference after a deploy (portfolio demos).
 // Bump APP_VERSION and/or edit APP_MESSAGE, push, then reload.
 // ---------------------------------------------------------------------------
-const APP_VERSION = "1.0.0";
-const APP_MESSAGE = "Hello from cicd-test-app";
+const APP_VERSION = "1.1.0";
+const APP_MESSAGE = "Deployed by GitHub Actions → GHCR → Coolify";
 const APP_COLOR = "#2563eb"; // header accent; try #0f766e, #b45309, #7c3aed, etc.
 
 function escapeHtml(value) {
