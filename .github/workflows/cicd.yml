@@ -125,7 +125,7 @@ jobs:
           echo "image=${NAME}" >> "$GITHUB_OUTPUT"
 
       - name: Set up Buildx
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
       # Cache scope is per branch, so a fork PR writes into its own scope and cannot reach the default branch's. Withholding the write on PRs is the quota and hygiene control on top of that; the boundary that protects the release path is `publish` restoring no cache at all.
       - name: Build image (no push on PR)
@@ -220,7 +220,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Buildx
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
       # No cache-from on the release build: don't restore a cache a PR job (potentially attacker-influenced) may have written.
       - name: Build and push
