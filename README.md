@@ -2,7 +2,7 @@
 
 Minimal Node.js HTTP server, no dependencies. It exists to give the pipeline something to build, test, ship and visibly change.
 
-The pipeline itself is documented in [`docs/GitHub Actions CI-CD.md`](../docs/GitHub%20Actions%20CI-CD.md); why it is built that way is in [`docs/GitHub Actions Safety Rationale.md`](../docs/GitHub%20Actions%20Safety%20Rationale.md).
+The pipeline itself is documented in [`docs/GitHub Actions CI-CD.md`](https://github.com/Enz0Santos/secure-production-vps/blob/main/docs/GitHub%20Actions%20CI-CD.md); why it is built that way is in [`docs/GitHub Actions Safety Rationale.md`](https://github.com/Enz0Santos/secure-production-vps/blob/main/docs/GitHub%20Actions%20Safety%20Rationale.md).
 
 ## Endpoints
 
@@ -18,7 +18,7 @@ Locally: `http://localhost:3000/health`.
 
 Edit the constants at the top of [`src/index.js`](src/index.js):
 
-```js
+```jsq
 const APP_VERSION = "1.0.0";                  // bump this
 const APP_MESSAGE = "Hello from cicd-test-app";  // change the headline
 const APP_COLOR = "#2563eb";                  // header accent
@@ -41,7 +41,7 @@ The port comes from `PORT` and defaults to `3000`. The server binds `0.0.0.0`, s
 
 ## Before the first run
 
-`.github/CODEOWNERS` ships with an `@<owner-username>` placeholder, and GitHub skips any ownership rule whose owner does not resolve to a real account. The `workflow-lint` job fails the build while it is still there, on purpose: a review gate that matches nobody reads as protection in a diff and enforces nothing. Put a real handle in it, then enable `Require review from Code Owners` on the branch rule, per [`docs/Manual Setup Checklist.md`](../docs/Manual%20Setup%20Checklist.md) §IV.
+`.github/CODEOWNERS` ships with an `@<owner-username>` placeholder, and GitHub skips any ownership rule whose owner does not resolve to a real account. The `workflow-lint` job fails the build while it is still there, on purpose: a review gate that matches nobody reads as protection in a diff and enforces nothing. Put a real handle in it, then enable `Require review from Code Owners` on the branch rule, per [`docs/Manual Setup Checklist.md`](https://github.com/Enz0Santos/secure-production-vps/blob/main/docs/Manual%20Setup%20Checklist.md) §IV.
 
 ## Why the Dockerfile looks like that
 
