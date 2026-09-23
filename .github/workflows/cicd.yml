@@ -129,7 +129,7 @@ jobs:
 
       # Cache scope is per branch, so a fork PR writes into its own scope and cannot reach the default branch's. Withholding the write on PRs is the quota and hygiene control on top of that; the boundary that protects the release path is `publish` restoring no cache at all.
       - name: Build image (no push on PR)
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           push: false
@@ -225,7 +225,7 @@ jobs:
       # No cache-from on the release build: don't restore a cache a PR job (potentially attacker-influenced) may have written.
       - name: Build and push
         id: build
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           push: true
